@@ -1,0 +1,19 @@
+{
+  "name": "real-time-collab-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "tsx packages/shared/src/rga.test.ts"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/client"
+  ],
+  "devDependencies": {
+    "tsx": "^4.23.0"
+  }
+}
