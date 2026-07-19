@@ -42,7 +42,7 @@ function getRoom(docId: string): Room {
   return room;
 }
 
-const PORT = 8080;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const wss = new WebSocketServer({ port: PORT });
 
 const HEARTBEAT_INTERVAL_MS = 15000;
