@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { RgaDocument } from '../../shared/src/index.js';
 import type { RgaOp } from '../../shared/src/index.js';
-import { logOp, loadDocument, saveSnapshot } from './db.js';
+import { logOp, loadDocument, saveSnapshot, verifyRoomPassword, deleteRoom } from './db.js';
 
 const SNAPSHOT_INTERVAL = 20;
 
@@ -26,14 +26,15 @@ function getRoom(docId: string): Room {
   let room = rooms.get(docId);
   if (room) return room;
 
-  const { nodes, ops, lastOpId } = loadDocument(docId);
+  const { nodes, marks, ops, lastOpId } = loadDocument(docId);
   const doc = new RgaDocument(`server-${docId}`);
   doc.loadSnapshot(nodes);
+  doc.loadMarksSnapshot(marks);
   for (const op of ops) {
     doc.applyRemote(op);
   }
   console.log(
-    `[server] hydrated room "${docId}" from disk (${nodes.length} snapshot nodes + ${ops.length} replayed ops)`
+    `[server] hydrated room "${docId}" from disk (${nodes.length} snapshot nodes, ${marks.length} marks + ${ops.length} replayed ops)`
   );
 
   room = { doc, clients: new Set(), lastOpId, opsSinceSnapshot: 0, presence: new Map() };
@@ -73,16 +74,53 @@ wss.on('connection', (socket, req) => {
   });
 
   const docId = (req.url ?? '/default').slice(1) || 'default';
-  const room = getRoom(docId);
-  room.clients.add(socket);
-  console.log(`[server] client joined room "${docId}" (${room.clients.size} connected)`);
-
-  socket.send(JSON.stringify({ type: 'init', nodes: room.doc.getSnapshotNodes() }));
-
-  socket.send(JSON.stringify({ type: 'presence-init', users: Array.from(room.presence.values()) }));
+  let authenticated = false;
+  let room: Room | null = null;
 
   socket.on('message', (raw) => {
     const msg = JSON.parse(raw.toString());
+
+    if (!authenticated) {
+      if (msg.type !== 'join') return;
+      const ok = verifyRoomPassword(docId, msg.password ?? '');
+      if (!ok) {
+        socket.send(JSON.stringify({ type: 'join-rejected' }));
+        socket.close();
+        return;
+      }
+
+      authenticated = true;
+      room = getRoom(docId);
+      room.clients.add(socket);
+      console.log(`[server] client joined room "${docId}" (${room.clients.size} connected)`);
+
+      socket.send(JSON.stringify({ type: 'join-accepted' }));
+
+      socket.send(
+        JSON.stringify({ type: 'init', nodes: room.doc.getSnapshotNodes(), marks: room.doc.getSnapshotMarks() })
+      );
+
+      socket.send(JSON.stringify({ type: 'presence-init', users: Array.from(room.presence.values()) }));
+      return;
+    }
+
+    const currentRoom = room!;
+
+    if (msg.type === 'delete-room') {
+      console.log(`[server] deleting room "${docId}" (requested by a connected client)`);
+
+      deleteRoom(docId);
+
+      for (const other of currentRoom.clients) {
+        if (other.readyState === WebSocket.OPEN) {
+          other.send(JSON.stringify({ type: 'room-deleted' }));
+          other.close();
+        }
+      }
+
+      rooms.delete(docId);
+      return;
+    }
 
     if (msg.type === 'presence') {
       const info: PresenceInfo = {
@@ -91,10 +129,10 @@ wss.on('connection', (socket, req) => {
         color: msg.color,
         cursorPos: msg.cursorPos,
       };
-      room.presence.set(socket, info);
+      currentRoom.presence.set(socket, info);
       console.log(`[server] presence update: ${info.name} (${info.userId}) @ pos ${info.cursorPos}`);
 
-      for (const other of room.clients) {
+      for (const other of currentRoom.clients) {
         if (other !== socket && other.readyState === WebSocket.OPEN) {
           other.send(JSON.stringify(msg));
         }
@@ -104,18 +142,18 @@ wss.on('connection', (socket, req) => {
 
     const op: RgaOp = msg;
 
-    room.doc.applyRemote(op);
+    currentRoom.doc.applyRemote(op);
 
-    room.lastOpId = logOp(docId, op);
-    room.opsSinceSnapshot++;
+    currentRoom.lastOpId = logOp(docId, op);
+    currentRoom.opsSinceSnapshot++;
 
-    if (room.opsSinceSnapshot >= SNAPSHOT_INTERVAL) {
-      saveSnapshot(docId, room.doc.getSnapshotNodes(), room.lastOpId);
-      room.opsSinceSnapshot = 0;
-      console.log(`[server] snapshotted room "${docId}" at op ${room.lastOpId}`);
+    if (currentRoom.opsSinceSnapshot >= SNAPSHOT_INTERVAL) {
+      saveSnapshot(docId, currentRoom.doc.getSnapshotNodes(), currentRoom.doc.getSnapshotMarks(), currentRoom.lastOpId);
+      currentRoom.opsSinceSnapshot = 0;
+      console.log(`[server] snapshotted room "${docId}" at op ${currentRoom.lastOpId}`);
     }
 
-    for (const other of room.clients) {
+    for (const other of currentRoom.clients) {
       if (other !== socket && other.readyState === WebSocket.OPEN) {
         other.send(JSON.stringify(op));
       }
@@ -123,6 +161,7 @@ wss.on('connection', (socket, req) => {
   });
 
   socket.on('close', () => {
+    if (!room) return;
     room.clients.delete(socket);
     const info = room.presence.get(socket);
     room.presence.delete(socket);

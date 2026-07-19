@@ -17,14 +17,23 @@ class SimulatedClient {
     this.ready = new Promise((resolve) => {
       this.socket.on('open', () => resolve());
     });
+    let authed = false;
     this.socket.on('message', (raw) => {
       const msg = JSON.parse(raw.toString());
+      if (msg.type === 'join-accepted') {
+        authed = true;
+        return;
+      }
+      if (!authed) return;
       if (msg.type === 'init') {
         this.doc.loadSnapshot(msg.nodes);
         this.cursorAfterId = this.doc.getLastVisibleId();
         return;
       }
       this.doc.applyRemote(msg as RgaOp);
+    });
+    this.socket.on('open', () => {
+      this.socket.send(JSON.stringify({ type: 'join', password: 'test' }));
     });
   }
 

@@ -3,15 +3,12 @@ import { idsEqual, compareId } from './id.js';
 
 type Side = 'L' | 'R';
 
-export const IMAGE_PLACEHOLDER = '\uFFFC';
-
 export interface RgaNode {
   id: OpId;
   char: string;
   originId: OpId | null;
   side?: Side;
   deleted: boolean;
-  imageSrc?: string;
 }
 
 export interface InsertOp {
@@ -20,7 +17,6 @@ export interface InsertOp {
   char: string;
   originId: OpId | null;
   side?: Side;
-  imageSrc?: string;
 }
 
 export interface DeleteOp {
@@ -28,22 +24,10 @@ export interface DeleteOp {
   id: OpId;
 }
 
-export type MarkType = 'bold' | 'italic';
-
-export interface MarkOp {
-  type: 'mark';
-  id: OpId;
-  markType: MarkType;
-  startId: OpId;
-  endId: OpId;
-  active: boolean;
-}
-
-export type RgaOp = InsertOp | DeleteOp | MarkOp;
+export type RgaOp = InsertOp | DeleteOp;
 
 export class RgaDocument {
   private nodes: RgaNode[] = [];
-  private marks: MarkOp[] = [];
   private counter = 0;
   private replicaId: string;
 
@@ -82,14 +66,6 @@ export class RgaDocument {
     return this.insertAfterId(originId, char);
   }
 
-  localInsertImage(afterVisibleIndex: number, src: string): InsertOp {
-    const originId = this.visibleIndexToId(afterVisibleIndex);
-    const id = this.nextId();
-    const op: InsertOp = { type: 'insert', id, char: IMAGE_PLACEHOLDER, originId, side: 'R', imageSrc: src };
-    this.integrateInsert(op);
-    return op;
-  }
-
   insertAfterId(originId: OpId | null, char: string): InsertOp {
     const id = this.nextId();
     const op: InsertOp = { type: 'insert', id, char, originId, side: 'R' };
@@ -114,22 +90,7 @@ export class RgaDocument {
 
   applyRemote(op: RgaOp) {
     if (op.type === 'insert') this.integrateInsert(op);
-    else if (op.type === 'delete') this.applyDelete(op);
-    else this.applyMark(op);
-  }
-
-  addMark(markType: MarkType, startVisibleIndex: number, endVisibleIndex: number, active: boolean): MarkOp {
-    const startId = this.visibleIndexToId(startVisibleIndex);
-    const endId = this.visibleIndexToId(endVisibleIndex);
-    if (startId === null || endId === null) throw new Error('invalid mark range');
-    const id = this.nextId();
-    const op: MarkOp = { type: 'mark', id, markType, startId, endId, active };
-    this.applyMark(op);
-    return op;
-  }
-
-  private applyMark(op: MarkOp) {
-    this.marks.push(op);
+    else this.applyDelete(op);
   }
 
   getSnapshotNodes(): RgaNode[] {
@@ -140,78 +101,9 @@ export class RgaDocument {
     this.nodes = nodes.map((n) => ({ ...n }));
   }
 
-  getSnapshotMarks(): MarkOp[] {
-    return this.marks.map((m) => ({ ...m }));
-  }
-
-  loadMarksSnapshot(marks: MarkOp[]) {
-    this.marks = marks.map((m) => ({ ...m }));
-  }
-
   getLastVisibleId(): OpId | null {
     const visible = this.nodes.filter((n) => !n.deleted);
     return visible.length > 0 ? visible[visible.length - 1].id : null;
-  }
-
-  private opIdKey(id: OpId): string {
-    return `${id.replicaId}:${id.counter}`;
-  }
-
-  getFormattedRuns(): Array<{ text: string; bold: boolean; italic: boolean; imageSrc?: string }> {
-    const visible = this.nodes.filter((n) => !n.deleted);
-    const indexByKey = new Map<string, number>();
-    visible.forEach((n, i) => indexByKey.set(this.opIdKey(n.id), i));
-
-    const resolveMarkType = (markType: MarkType): boolean[] => {
-      const result = new Array(visible.length).fill(false);
-      const winningId: (OpId | null)[] = new Array(visible.length).fill(null);
-      for (const mark of this.marks) {
-        if (mark.markType !== markType) continue;
-        const startIdx = indexByKey.get(this.opIdKey(mark.startId));
-        const endIdx = indexByKey.get(this.opIdKey(mark.endId));
-        if (startIdx === undefined || endIdx === undefined) continue;
-        const lo = Math.min(startIdx, endIdx);
-        const hi = Math.max(startIdx, endIdx);
-        for (let i = lo; i <= hi; i++) {
-          const current = winningId[i];
-          if (current === null || compareId(mark.id, current) > 0) {
-            winningId[i] = mark.id;
-            result[i] = mark.active;
-          }
-        }
-      }
-      return result;
-    };
-
-    const bold = resolveMarkType('bold');
-    const italic = resolveMarkType('italic');
-
-    const runs: Array<{ text: string; bold: boolean; italic: boolean; imageSrc?: string }> = [];
-    for (let i = 0; i < visible.length; i++) {
-      const n = visible[i];
-      if (n.imageSrc) {
-        runs.push({ text: n.char, bold: false, italic: false, imageSrc: n.imageSrc });
-        continue;
-      }
-      const last = runs[runs.length - 1];
-      if (last && !last.imageSrc && last.bold === bold[i] && last.italic === italic[i]) {
-        last.text += n.char;
-      } else {
-        runs.push({ text: n.char, bold: bold[i], italic: italic[i] });
-      }
-    }
-    return runs;
-  }
-
-  getImagePositions(): { id: OpId; src: string; visibleIndex: number }[] {
-    const result: { id: OpId; src: string; visibleIndex: number }[] = [];
-    let visibleIndex = -1;
-    for (const n of this.nodes) {
-      if (n.deleted) continue;
-      visibleIndex++;
-      if (n.imageSrc) result.push({ id: n.id, src: n.imageSrc, visibleIndex });
-    }
-    return result;
   }
 
   private applyDelete(op: DeleteOp) {
@@ -235,7 +127,7 @@ export class RgaDocument {
 
   private integrateInsert(op: InsertOp) {
     const side: Side = op.side ?? 'R';
-    const node: RgaNode = { id: op.id, char: op.char, originId: op.originId, side, deleted: false, imageSrc: op.imageSrc };
+    const node: RgaNode = { id: op.id, char: op.char, originId: op.originId, side, deleted: false };
 
     if (op.originId === null) {
       let i = 0;

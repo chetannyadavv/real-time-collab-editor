@@ -79,6 +79,11 @@ Upgrade RGA → Fugue to fix the interleaving anomaly; undo/redo; tombstone garb
 - **Rich-text formatting (bold/italic/headings):** a documented extension of sequence CRDTs — formatting spans attached to ranges of the existing character sequence, rather than baked into individual characters. Worth knowing this by name in an interview: the "Peritext" approach (Ink & Switch) is the standard reference.
 - **Tables: explicitly out of scope.** A table is inherently 2D/nested (rows of cells, each cell its own text run), which doesn't fit a flat sequence CRDT — real editors use a tree CRDT (Yjs's `XmlFragment`, Automerge's nested JSON model) for this, which is a comparably sized project on its own. Documented here as a known extension point with the correct approach named, rather than attempted under time pressure.
 
+## Known limitations (deliberately open, not oversights)
+- **Unconfirmed race condition from early M1**: a one-time divergence was observed when a client joined during concurrent typing; never reliably reproduced (5/5 clean on two machines), root cause never confirmed. This is about *initial* connection timing, not reconnection -- M4's offline-queue/reconnect work does NOT resolve it, despite earlier framing suggesting it would. Still genuinely open.
+- **M4 built Option 1 (full resync + replay) not Option 2 (delta/version-vector sync)**: a deliberate scope choice, same philosophy as RGA-before-Fugue. Full resync is correct and proven (tested: server kill, offline typing, concurrent offline edits across tabs). Delta sync would reduce data transferred on reconnect but adds real protocol complexity for a gap that isn't currently causing problems at this project's scale.
+- **contenteditable Enter-key handling uses `execCommand`**, a deprecated (though still broadly supported) browser API -- used deliberately to force reliable `\n` insertion instead of trusting inconsistent default browser behavior. Worth knowing if a browser ever drops support.
+
 ## Scope decision log
 - Chose CRDT over OT (see top of doc)
 - Chose to build RGA first, Fugue as a later upgrade
