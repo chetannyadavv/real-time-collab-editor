@@ -6,7 +6,7 @@ around an existing CRDT library (Yjs, Automerge). The conflict-resolution
 algorithm, the real-time sync protocol, presence, persistence, and
 reconnection logic are all implemented from scratch.
 
-**[Live demo](#) — replace with your deployed URL once M7 is complete**
+**[Live demo](https://real-time-collab-editor-2.onrender.com/) — replace with your deployed URL once M7 is complete**
 
 ## Why CRDT, and why build it by hand
 
